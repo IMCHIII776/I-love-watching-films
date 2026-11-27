@@ -1,0 +1,54 @@
+name: Train and Upload to Hugging Face
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sentiment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  train-and-upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      PYTHONHASHSEED: '42'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+      - name: Test data handling and artifact round trip
+        run: python -m unittest discover -s tests -v
+      - name: Train from the course CSV
+        run: python train.py
+      - name: Verify predictions and write results
+        run: |
+          python predict.py "I loved the acting and the wonderful story." "This was a boring and disappointing movie."
+          python -c "import json,os; m=json.load(open('model/metrics.json')); open(os.environ['GITHUB_STEP_SUMMARY'],'a').write('## Training results\n- Test accuracy: '+str(m['test_accuracy'])+'\n- Test macro F1: '+str(m['test_macro_f1'])+'\n- Split sizes: '+str(m['split_sizes'])+'\n')"
+      - name: Save downloadable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: imdb-sentiment-model-${{ github.run_number }}
+          path: model/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload model to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: ${{ vars.HF_REPO_ID }}
+        run: python upload_to_hf.py
